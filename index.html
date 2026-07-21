@@ -66,6 +66,37 @@
     log("stripped rtx PTs: "+Object.keys(rtx).join(","));
     return out.join("\r\n");
   }
+  // --- Force H.264-only for video ---
+  // The TouchPad has a HARDWARE H.264 codec (omxh264dec/omxh264enc) but WebRTC keeps picking
+  // software VP8 for send (~85% CPU at 640x480). Stripping VP8/VP9/AV1 from the video m-section
+  // leaves H.264 as the only choice, so WebKit's webkitvideoencoder uses omxh264enc (HW) to send
+  // and omxh264dec (HW) to receive. Default ON; disable at runtime with &h264=0 in the URL (escape
+  // hatch if the HW encoder fails to link). Guarded: if the peer offered no H264, leave SDP alone.
+  var H264_ONLY = !/[?&]h264=0/.test(location.search || "");
+  function forceH264(sdp){
+    if(!H264_ONLY || !sdp) return sdp;
+    var lines = sdp.split(/\r?\n/), vStart=-1, vEnd=lines.length, i;
+    for(i=0;i<lines.length;i++){
+      if(/^m=video /.test(lines[i])){ vStart=i; }
+      else if(vStart>=0 && i>vStart && /^m=/.test(lines[i])){ vEnd=i; break; }
+    }
+    if(vStart<0) return sdp;
+    var keep={}, any=false;
+    for(i=vStart;i<vEnd;i++){ var m=lines[i].match(/^a=rtpmap:(\d+)\s+H264\//i); if(m){ keep[m[1]]=1; any=true; } }
+    if(!any) return sdp;                              // peer didn't offer H264 -> don't break the call
+    var out=[];
+    for(i=0;i<lines.length;i++){
+      var l=lines[i];
+      if(i>=vStart && i<vEnd){
+        if(/^m=video /.test(l)){ var p=l.split(" "); out.push(p.filter(function(x,idx){return idx<3||keep[x];}).join(" ")); continue; }
+        var am=l.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)\b/i);
+        if(am && !keep[am[1]]) continue;             // drop VP8/VP9/AV1/rtx/red/ulpfec attribute lines
+      }
+      out.push(l);
+    }
+    log("forced H264-only video (PTs "+Object.keys(keep).join(",")+")");
+    return out.join("\r\n");
+  }
   (function(){
     var RP = window.RTCPeerConnection || window.webkitRTCPeerConnection;
     if(!RP || !RP.prototype) return;
@@ -73,7 +104,7 @@
       var orig = RP.prototype[fn];
       if(!orig) return;
       RP.prototype[fn] = function(desc){
-        try { if(desc && desc.sdp){ desc = {type:desc.type, sdp:stripRtx(desc.sdp)}; } } catch(e){}
+        try { if(desc && desc.sdp){ desc = {type:desc.type, sdp:stripRtx(forceH264(desc.sdp))}; } } catch(e){}
         return orig.apply(this, [desc].concat([].slice.call(arguments,1)));
       };
     });
