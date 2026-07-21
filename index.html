@@ -77,7 +77,7 @@
   function beHost(){
     status("Waiting for the other person to join…");
     log("hosting as " + HOST_ID);
-    peer.on("call", function(call){ log("incoming call from "+call.peer); call.answer(localStream); attach(call); });
+    peer.on("call", function(call){ log("incoming call from "+call.peer); status("Someone joined — connecting media…"); call.answer(localStream); attach(call); });
   }
   function callHost(){
     if (connected) return;
