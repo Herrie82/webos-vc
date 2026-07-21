@@ -151,9 +151,11 @@
   function getCam(){
     var md = navigator.mediaDevices;
     if (!md || !md.getUserMedia){ status("This browser can't open the camera (no getUserMedia)."); return; }
-    // Cap resolution/framerate: the old WPE web-process can OOM-crash (-> Atlas reloads) on full-res
-    // video. QVGA-ish @15fps is plenty for a call and much lighter to encode/decode.
-    md.getUserMedia({video:{width:{ideal:480},height:{ideal:360},frameRate:{ideal:15,max:20}}, audio:true}).then(function(s){
+    // Pin to 320x240 @15fps. The 2011 Qualcomm OMX video component (gst-omx) ASSERTS/aborts the whole
+    // WebProcess on a >320p reconfigure (documented in gstomxvideodec.c). WebRTC negotiates dynamic
+    // resolution, so a hard 320-wide/240-tall cap on BOTH sides keeps every stream <=320p -> no >320p
+    // reconfigure -> lets the hardware codec run without the crash. Also lighter for software fallback.
+    md.getUserMedia({video:{width:{ideal:320,max:320},height:{ideal:240,max:240},frameRate:{ideal:15,max:20}}, audio:true}).then(function(s){
       localStream=s; var lv=$("local"); lv.srcObject=s; playEl(lv); log("camera OK");
       startPeer(HOST_ID);   // first to claim the host id hosts; the other becomes guest and calls it
     }).catch(function(e){ status("Camera/mic blocked: " + (e&&e.name||e)); });
