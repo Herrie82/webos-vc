@@ -189,11 +189,33 @@
     playEl(v);
     if (vt[0]) vt[0].onunmute = function(){ log("remote video unmuted"); playEl(v); };
   }
+  // Cap the OUTBOUND encode load. WPE's getUserMedia ignores the 320x240 request and captures
+  // 640x480, which is 4x the pixels — on the 2011 TouchPad, HW-encoding that WHILE HW-decoding the
+  // peer AND software-compositing the display saturates both cores and crashes the WebProcess.
+  // scaleResolutionDownBy=2 makes the encoder downscale to ~320x240; also cap fps + bitrate.
+  function constrainSender(call){
+    try {
+      var pc = call && call.peerConnection;
+      if (!pc || !pc.getSenders) return;
+      pc.getSenders().forEach(function(s){
+        if (!s.track || s.track.kind !== "video" || !s.getParameters) return;
+        var p = s.getParameters();
+        if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+        p.encodings[0].scaleResolutionDownBy = 2;
+        p.encodings[0].maxFramerate = 15;
+        p.encodings[0].maxBitrate = 400000;
+        s.setParameters(p).then(function(){ log("sender capped: /2, 15fps, 400kbps"); })
+                          .catch(function(e){ log("setParameters failed: "+(e&&e.name||e)); });
+      });
+    } catch(e){ log("constrainSender err: "+e); }
+  }
   function attach(call){
     activeCall=call; watchIce(call);
     call.on("stream", onStream);
     call.on("close", function(){ log("call closed"); if(!connected) status("Other side left."); });
     call.on("error", function(e){ log("call error: "+(e&&e.type||e)); });
+    setTimeout(function(){ constrainSender(call); }, 1500);   // after senders exist
+    setTimeout(function(){ constrainSender(call); }, 4000);   // retry once negotiated
   }
 
   function beHost(){
