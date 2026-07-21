@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>webOS Video Call</title>
+<style>
+  html,body{margin:0;height:100%;background:#0f1115;color:#e8eaf0;
+    font-family:-apple-system,Helvetica,Arial,sans-serif;overflow:hidden}
+  #remote{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;background:#000}
+  #local{position:absolute;right:10px;bottom:74px;width:150px;height:112px;object-fit:cover;
+    background:#000;border:2px solid #2a2e37;border-radius:8px;z-index:2}
+  #bar{position:absolute;left:0;bottom:0;width:100%;height:64px;background:rgba(16,18,24,.86);
+    display:flex;align-items:center;justify-content:center;gap:14px;z-index:3}
+  #status{position:absolute;top:0;left:0;width:100%;text-align:center;padding:10px 8px;
+    font-size:15px;color:#e5c04f;background:rgba(16,18,24,.7);z-index:3}
+  .btn{border:none;border-radius:26px;padding:12px 22px;font-size:16px;font-weight:600;color:#fff}
+  #hang{background:#c0392b} #mute{background:#333} #camoff{background:#333}
+  #err{position:absolute;top:44%;left:0;width:100%;text-align:center;font-size:17px;
+    color:#e0715a;padding:0 20px;z-index:3;display:none}
+</style>
+</head>
+<body>
+  <video id="remote" autoplay playsinline></video>
+  <video id="local" autoplay playsinline muted></video>
+  <div id="status">Starting…</div>
+  <div id="err"></div>
+  <div id="bar">
+    <button id="mute" class="btn">Mute</button>
+    <button id="camoff" class="btn">Camera</button>
+    <button id="hang" class="btn">Hang up</button>
+  </div>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  function status(t){ $("status").textContent = t; }
+  function fail(t){ var e=$("err"); e.textContent=t; e.style.display="block"; status(""); }
+
+  // Room comes from the URL hash (#<room>); both callers use the same room to meet.
+  var room = (location.hash || "").replace(/^#/, "").replace(/[^a-zA-Z0-9]/g, "");
+  if (!room) { room = "webosVClobby"; }
+  var HOST_ID = "webosvc-" + room + "-host";
+
+  var localStream = null, peer = null, activeCall = null, muted = false, camOff = false;
+
+  function attachRemote(call){
+    activeCall = call;
+    call.on("stream", function(rs){ $("remote").srcObject = rs; status(""); });
+    call.on("close", function(){ status("Call ended."); });
+    call.on("error", function(e){ status("Call error: " + (e && e.type || e)); });
+  }
+
+  function beHost(){
+    status("Waiting for the other person to join…");
+    peer.on("call", function(call){ call.answer(localStream); attachRemote(call); });
+  }
+  function beGuest(){
+    status("Connecting…");
+    var call = peer.call(HOST_ID, localStream);
+    if (call) { attachRemote(call); }
+    else { setTimeout(beGuest, 1200); } // host not ready yet, retry
+  }
+
+  function startPeer(asHostId){
+    peer = asHostId ? new Peer(asHostId) : new Peer();
+    peer.on("open", function(){ if (asHostId) beHost(); else beGuest(); });
+    peer.on("error", function(e){
+      if (e && e.type === "unavailable-id") {
+        // Someone already claimed the host slot -> we are the guest and call them.
+        try { peer.destroy(); } catch(x){}
+        startPeer(null);
+      } else if (e && e.type === "peer-unavailable") {
+        status("Waiting for the other person…"); setTimeout(beGuest, 1500);
+      } else {
+        status("Network: " + (e && e.type || e));
+      }
+    });
+  }
+
+  function getCam(){
+    var md = navigator.mediaDevices;
+    if (!md || !md.getUserMedia) { fail("This browser can't access the camera (getUserMedia missing)."); return; }
+    md.getUserMedia({ video: true, audio: true }).then(function(s){
+      localStream = s; $("local").srcObject = s;
+      // First to claim HOST_ID hosts; the other errors out and becomes the guest.
+      startPeer(HOST_ID);
+    }).catch(function(e){ fail("Camera/mic blocked: " + (e && e.name || e)); });
+  }
+
+  $("hang").onclick = function(){
+    try { if (activeCall) activeCall.close(); } catch(x){}
+    try { if (peer) peer.destroy(); } catch(x){}
+    try { if (localStream) localStream.getTracks().forEach(function(t){ t.stop(); }); } catch(x){}
+    status("Call ended. You can close this card.");
+    if (window.PalmSystem && window.close) { try { window.close(); } catch(x){} }
+  };
+  $("mute").onclick = function(){
+    muted = !muted; if (localStream) localStream.getAudioTracks().forEach(function(t){ t.enabled = !muted; });
+    $("mute").textContent = muted ? "Unmute" : "Mute";
+  };
+  $("camoff").onclick = function(){
+    camOff = !camOff; if (localStream) localStream.getVideoTracks().forEach(function(t){ t.enabled = !camOff; });
+    $("camoff").textContent = camOff ? "Cam on" : "Camera";
+  };
+
+  if (typeof Peer === "undefined") { fail("Failed to load the call library (no network?)."); return; }
+  getCam();
+})();
+</script>
+</body>
+</html>
