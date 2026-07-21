@@ -72,7 +72,12 @@
   // leaves H.264 as the only choice, so WebKit's webkitvideoencoder uses omxh264enc (HW) to send
   // and omxh264dec (HW) to receive. Default ON; disable at runtime with &h264=0 in the URL (escape
   // hatch if the HW encoder fails to link). Guarded: if the peer offered no H264, leave SDP alone.
-  var H264_ONLY = !/[?&]h264=0/.test(location.search || "");
+  // Default OFF: the TouchPad's OMX H.264 *encoder* (omxh264enc) is unusable — gst-omx
+  // gst_omx_video_enc_getcaps returns "Supported caps EMPTY" for OMX.qcom.video.encoder.avc, so
+  // its packetizer never links ("Unable to link packetizer to RTP funnel") and forcing H264-only
+  // kills outbound. So we let WebRTC pick VP8 (software) for SEND, while still HW-decoding the
+  // peer's H.264 on RECEIVE. Opt in to the (currently broken) HW-encode path with &h264=1.
+  var H264_ONLY = /[?&]h264=1/.test(location.search || "");
   function forceH264(sdp){
     if(!H264_ONLY || !sdp) return sdp;
     var lines = sdp.split(/\r?\n/), vStart=-1, vEnd=lines.length, i;
