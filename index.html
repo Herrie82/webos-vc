@@ -88,7 +88,7 @@
   log("url=" + location.href);
   log("room=" + room + "  hostId=" + HOST_ID);
 
-  var localStream=null, peer=null, activeCall=null, muted=false, camOff=false, connected=false, retryTimer=null;
+  var localStream=null, peer=null, activeCall=null, muted=false, camOff=false, connected=false, retryTimer=null, callAttempts=0;
 
   function watchIce(call){
     try {
@@ -127,16 +127,31 @@
   function beHost(){
     status("Waiting for the other person to join…");
     log("hosting as " + HOST_ID);
-    peer.on("call", function(call){ log("incoming call from "+call.peer); status("Someone joined — connecting media…"); call.answer(localStream); attach(call); });
+    peer.on("call", function(call){ log("incoming call from "+call.peer); status("Someone joined — connecting media…");
+      // If the guest retried, it opens a NEW incoming call each time. Close the previous one so the
+      // host doesn't accumulate webrtcbins (thread exhaustion -> WebProcess abort on the TouchPad).
+      if (activeCall && activeCall !== call){ try{activeCall.close();}catch(x){} }
+      call.answer(localStream); attach(call); });
   }
   function callHost(){
     if (connected) return;
-    log("calling host " + HOST_ID + " …");
+    // CRITICAL: close the previous call before making a new one. Each peer.call() creates a fresh
+    // RTCPeerConnection (a gst webrtcbin, several threads). On the 2011 TouchPad, letting the 3s
+    // retry spawn a new one every time (webrtcbin-0..6) exhausts threads -> GLib-ERROR aborts the
+    // WebProcess before any frame encodes. Reuse one connection; give up after a few tries.
+    if (activeCall){ try{activeCall.close();}catch(x){} activeCall=null; }
+    if (++callAttempts > 6){
+      if(retryTimer){clearInterval(retryTimer);retryTimer=null;}
+      status("Couldn't connect after several tries — tap to retry.");
+      return;
+    }
+    log("calling host " + HOST_ID + " (attempt " + callAttempts + ") …");
     var call = peer.call(HOST_ID, localStream);
     if (call) attach(call); else log("peer.call returned null");
   }
   function beGuest(){
     status("Connecting to the other person…");
+    callAttempts=0;
     callHost();
     // Keep retrying until the media stream arrives (handles host-not-ready-yet / dropped signalling).
     if(!retryTimer) retryTimer=setInterval(function(){ if(!connected) callHost(); }, 3000);
@@ -183,7 +198,8 @@
     $("camoff").textContent=camOff?"Cam on":"Camera"; };
   $("dbgbtn").onclick=function(){ var d=$("dbg"); d.style.display=(d.style.display==="none"?"block":"none"); };
 
-  document.addEventListener("click", function(){ var r=$("remote"),l=$("local"); if(r){ r.muted=false; if(r.srcObject)playEl(r); } if(l&&l.srcObject)playEl(l); }, false);
+  document.addEventListener("click", function(){ var r=$("remote"),l=$("local"); if(r){ r.muted=false; if(r.srcObject)playEl(r); } if(l&&l.srcObject)playEl(l);
+    if(!connected && peer && !peer.destroyed){ callAttempts=0; if(!retryTimer) retryTimer=setInterval(function(){ if(!connected) callHost(); }, 3000); callHost(); } }, false);
   window.addEventListener("resize", layout, false);
   window.addEventListener("orientationchange", function(){ setTimeout(layout,150); setTimeout(layout,600); }, false);
   layout(); setTimeout(layout,300); setTimeout(layout,1200);
