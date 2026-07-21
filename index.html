@@ -189,10 +189,11 @@
     playEl(v);
     if (vt[0]) vt[0].onunmute = function(){ log("remote video unmuted"); playEl(v); };
   }
-  // Cap the OUTBOUND encode load. WPE's getUserMedia ignores the 320x240 request and captures
-  // 640x480, which is 4x the pixels — on the 2011 TouchPad, HW-encoding that WHILE HW-decoding the
-  // peer AND software-compositing the display saturates both cores and crashes the WebProcess.
-  // scaleResolutionDownBy=2 makes the encoder downscale to ~320x240; also cap fps + bitrate.
+  // Cap the OUTBOUND encode with the FREE knobs only. The TouchPad camera (qcamsrc) is fixed at
+  // NV12 640x480 — it can't capture QVGA — and the OMX HW encoder handles 640x480 natively at low
+  // CPU, so we do NOT downscale: scaleResolutionDownBy would force a SOFTWARE videoscale, adding
+  // CPU for no benefit. maxFramerate/maxBitrate cost nothing (the encoder just emits fewer/leaner
+  // frames) and keep bandwidth sane on the 2011 hardware.
   function constrainSender(call){
     try {
       var pc = call && call.peerConnection;
@@ -201,10 +202,10 @@
         if (!s.track || s.track.kind !== "video" || !s.getParameters) return;
         var p = s.getParameters();
         if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-        p.encodings[0].scaleResolutionDownBy = 2;
+        delete p.encodings[0].scaleResolutionDownBy;   // encode native 640x480 (no SW scale)
         p.encodings[0].maxFramerate = 15;
-        p.encodings[0].maxBitrate = 400000;
-        s.setParameters(p).then(function(){ log("sender capped: /2, 15fps, 400kbps"); })
+        p.encodings[0].maxBitrate = 600000;
+        s.setParameters(p).then(function(){ log("sender capped: native 640x480, 15fps, 600kbps"); })
                           .catch(function(e){ log("setParameters failed: "+(e&&e.name||e)); });
       });
     } catch(e){ log("constrainSender err: "+e); }
