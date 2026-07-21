@@ -63,10 +63,15 @@
       if (pc) pc.oniceconnectionstatechange = function(){ log("ICE: " + pc.iceConnectionState); };
     } catch(e){}
   }
+  function playEl(el){
+    try { var pr = el.play(); if (pr && pr.catch) pr.catch(function(e){ log(el.id+" play() blocked: "+e.name+" (tap the screen)"); }); } catch(e){ log(el.id+" play err: "+e); }
+  }
   function onStream(rs){
-    log("remote stream received, tracks=" + (rs.getTracks?rs.getTracks().length:"?"));
+    var vt = rs.getVideoTracks ? rs.getVideoTracks() : [], at = rs.getAudioTracks ? rs.getAudioTracks() : [];
+    log("remote stream: video="+vt.length+" audio="+at.length + (vt[0] ? (" enabled="+vt[0].enabled+" muted="+vt[0].muted+" state="+vt[0].readyState) : ""));
     connected=true; if(retryTimer){clearInterval(retryTimer);retryTimer=null;}
-    $("remote").srcObject=rs; status("Connected.");
+    var v = $("remote"); v.srcObject=rs; status("Connected."); playEl(v);
+    if (vt[0]) vt[0].onunmute = function(){ log("remote video unmuted"); playEl(v); };
   }
   function attach(call){
     activeCall=call; watchIce(call);
@@ -116,7 +121,7 @@
     var md = navigator.mediaDevices;
     if (!md || !md.getUserMedia){ status("This browser can't open the camera (no getUserMedia)."); return; }
     md.getUserMedia({video:true, audio:true}).then(function(s){
-      localStream=s; $("local").srcObject=s; log("camera OK");
+      localStream=s; var lv=$("local"); lv.srcObject=s; playEl(lv); log("camera OK");
       startPeer(HOST_ID);   // first to claim the host id hosts; the other becomes guest and calls it
     }).catch(function(e){ status("Camera/mic blocked: " + (e&&e.name||e)); });
   }
@@ -130,6 +135,7 @@
     $("camoff").textContent=camOff?"Cam on":"Camera"; };
   $("dbgbtn").onclick=function(){ var d=$("dbg"); d.style.display=(d.style.display==="none"?"block":"none"); };
 
+  document.addEventListener("click", function(){ var r=$("remote"),l=$("local"); if(r&&r.srcObject)playEl(r); if(l&&l.srcObject)playEl(l); }, false);
   if (typeof Peer==="undefined"){ status("Failed to load call library (no network?)."); return; }
   log("peerjs loaded"); getCam();
 })();
