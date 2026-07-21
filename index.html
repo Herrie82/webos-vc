@@ -52,7 +52,11 @@
   function set(id, css){ var e=$(id); if(!e) return; for(var k in css){ e.style[k]=css[k]; } }
   function layout(){
     var iw = window.innerWidth || 1024;
-    var landscape = (typeof window.orientation === "number") ? (Math.abs(window.orientation) === 90) : (iw >= 896);
+    // WPE/Atlas reports window.orientation=0 even in landscape, which wrongly picks a 1024-tall
+    // portrait layout and shoves the video/PiP to y~847, off the visible 768px screen. The tall
+    // render buffer also makes innerHeight unreliable. Decide by width only: the buffer width ==
+    // the real screen width (1024 landscape / 768 portrait on the TouchPad).
+    var landscape = (iw >= 896);
     var W = (iw >= 320 && iw <= 1200) ? iw : (landscape ? 1024 : 768);
     var H = landscape ? 768 : 1024;
     var barH = 64, pip = 105;
@@ -93,7 +97,16 @@
     } catch(e){}
   }
   function playEl(el){
-    try { var pr = el.play(); if (pr && pr.catch) pr.catch(function(e){ log(el.id+" play() blocked: "+e.name+" (tap the screen)"); }); } catch(e){ log(el.id+" play err: "+e); }
+    try {
+      var pr = el.play();
+      if (pr && pr.catch) pr.catch(function(e){
+        // Unmuted autoplay is blocked without a user gesture (WPE/Atlas + mobile browsers).
+        // Fall back to MUTED autoplay (always allowed) so the picture shows immediately; a tap
+        // then unmutes for audio. Without this the remote <video> paints nothing (blank/white).
+        log(el.id+" play() blocked: "+e.name+" -> retrying muted");
+        try { el.muted = true; el.play().then(function(){ if(el.id==="remote") status("Video playing (muted) — tap to unmute"); }).catch(function(e2){ log(el.id+" still blocked: "+e2.name); }); } catch(x){}
+      });
+    } catch(e){ log(el.id+" play err: "+e); }
   }
   function onStream(rs){
     var vt = rs.getVideoTracks ? rs.getVideoTracks() : [], at = rs.getAudioTracks ? rs.getAudioTracks() : [];
@@ -170,7 +183,7 @@
     $("camoff").textContent=camOff?"Cam on":"Camera"; };
   $("dbgbtn").onclick=function(){ var d=$("dbg"); d.style.display=(d.style.display==="none"?"block":"none"); };
 
-  document.addEventListener("click", function(){ var r=$("remote"),l=$("local"); if(r&&r.srcObject)playEl(r); if(l&&l.srcObject)playEl(l); }, false);
+  document.addEventListener("click", function(){ var r=$("remote"),l=$("local"); if(r){ r.muted=false; if(r.srcObject)playEl(r); } if(l&&l.srcObject)playEl(l); }, false);
   window.addEventListener("resize", layout, false);
   window.addEventListener("orientationchange", function(){ setTimeout(layout,150); setTimeout(layout,600); }, false);
   layout(); setTimeout(layout,300); setTimeout(layout,1200);
