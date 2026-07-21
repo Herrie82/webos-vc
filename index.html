@@ -46,18 +46,30 @@
   // Atlas MODE-1 gives the page a tall (~3072px) render buffer, so height:100% / bottom:0 land far
   // below the visible screen (the WIDTH stays the real device width; only the height is buffered).
   // Clamp the whole UI to a fixed-size box over the visible screen: 768 tall in landscape, 1024 in portrait.
+  // In the 3072px buffer, a fixed element's bottom:0 = BUFFER bottom (off-screen); an explicit
+  // top: value is measured from the (visible) top. So position everything with top, from a hardcoded
+  // TouchPad screen height (768 landscape / 1024 portrait). screen.* is unreliable (returns the buffer).
+  function set(id, css){ var e=$(id); if(!e) return; for(var k in css){ e.style[k]=css[k]; } }
   function layout(){
     var iw = window.innerWidth || 1024;
-    var lo = Math.min(screen.width||768, screen.height||1024);   // 768
-    var hi = Math.max(screen.width||768, screen.height||1024);   // 1024
-    var landscape = (typeof window.orientation === "number") ? (Math.abs(window.orientation) === 90) : (iw >= (lo+hi)/2);
-    var visH = landscape ? lo : hi;
-    var b = document.body, d = document.documentElement;
-    d.style.height = visH+"px"; d.style.width = iw+"px"; d.style.overflow = "hidden";
-    b.style.position = "fixed"; b.style.top = "0"; b.style.left = "0";
-    b.style.width = iw+"px"; b.style.height = visH+"px"; b.style.overflow = "hidden";
-    var r = $("remote"); if (r){ r.style.width = iw+"px"; r.style.height = visH+"px"; }
-    log("layout "+iw+"x"+visH+" ("+(landscape?"landscape":"portrait")+")");
+    var landscape = (typeof window.orientation === "number") ? (Math.abs(window.orientation) === 90) : (iw >= 896);
+    var W = (iw >= 320 && iw <= 1200) ? iw : (landscape ? 1024 : 768);
+    var H = landscape ? 768 : 1024;
+    var barH = 64, pip = 105;
+    var key = W+"x"+H;
+    if (key === layout._last) { return; }   // no change -> don't re-write styles (breaks any resize->layout loop)
+    layout._last = key;
+    document.documentElement.style.height = H+"px";
+    var b = document.body;
+    b.style.position="fixed"; b.style.top="0px"; b.style.left="0px";
+    b.style.width=W+"px"; b.style.height=H+"px"; b.style.overflow="hidden";
+    set("remote",{position:"fixed", top:"0px", left:"0px", width:W+"px", height:H+"px"});
+    set("status",{position:"fixed", top:"0px", left:"0px", width:W+"px"});
+    set("bar",   {position:"fixed", left:"0px", top:(H-barH)+"px", bottom:"auto", width:W+"px"});
+    set("local", {position:"fixed", right:"10px", top:(H-barH-pip-8)+"px", bottom:"auto"});
+    set("dbg",   {position:"fixed", left:"6px", top:"46px", bottom:"auto", maxHeight:(H-barH-56)+"px"});
+    set("err",   {position:"fixed", top:Math.round(H*0.42)+"px"});
+    log("layout W="+W+" H="+H+" "+(landscape?"landscape":"portrait")+" (iw="+iw+" screen="+screen.width+"x"+screen.height+")");
   }
 
   // Room: prefer ?room= (survives app launch); fall back to #hash; then a shared lobby.
@@ -139,7 +151,9 @@
   function getCam(){
     var md = navigator.mediaDevices;
     if (!md || !md.getUserMedia){ status("This browser can't open the camera (no getUserMedia)."); return; }
-    md.getUserMedia({video:true, audio:true}).then(function(s){
+    // Cap resolution/framerate: the old WPE web-process can OOM-crash (-> Atlas reloads) on full-res
+    // video. QVGA-ish @15fps is plenty for a call and much lighter to encode/decode.
+    md.getUserMedia({video:{width:{ideal:480},height:{ideal:360},frameRate:{ideal:15,max:20}}, audio:true}).then(function(s){
       localStream=s; var lv=$("local"); lv.srcObject=s; playEl(lv); log("camera OK");
       startPeer(HOST_ID);   // first to claim the host id hosts; the other becomes guest and calls it
     }).catch(function(e){ status("Camera/mic blocked: " + (e&&e.name||e)); });
