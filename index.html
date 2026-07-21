@@ -64,6 +64,7 @@
     } catch(e){}
   }
   function onStream(rs){
+    log("remote stream received, tracks=" + (rs.getTracks?rs.getTracks().length:"?"));
     connected=true; if(retryTimer){clearInterval(retryTimer);retryTimer=null;}
     $("remote").srcObject=rs; status("Connected.");
   }
@@ -92,9 +93,15 @@
     if(!retryTimer) retryTimer=setInterval(function(){ if(!connected) callHost(); }, 3000);
   }
 
+  var PEEROPTS = { config: { iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "turn:openrelay.metered.ca:80",  username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+  ] } };
   function startPeer(asHostId){
     log("startPeer(" + (asHostId||"random-guest") + ")");
-    peer = asHostId ? new Peer(asHostId) : new Peer();
+    peer = asHostId ? new Peer(asHostId, PEEROPTS) : new Peer(PEEROPTS);
     peer.on("open", function(id){ log("peer open, myId=" + id); if(asHostId) beHost(); else beGuest(); });
     peer.on("disconnected", function(){ log("peer disconnected from broker; reconnecting"); try{peer.reconnect();}catch(e){} });
     peer.on("error", function(e){
