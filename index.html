@@ -8,104 +8,123 @@
   html,body{margin:0;height:100%;background:#0f1115;color:#e8eaf0;
     font-family:-apple-system,Helvetica,Arial,sans-serif;overflow:hidden}
   #remote{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;background:#000}
-  #local{position:absolute;right:10px;bottom:74px;width:150px;height:112px;object-fit:cover;
+  #local{position:absolute;right:10px;bottom:74px;width:140px;height:105px;object-fit:cover;
     background:#000;border:2px solid #2a2e37;border-radius:8px;z-index:2}
   #bar{position:absolute;left:0;bottom:0;width:100%;height:64px;background:rgba(16,18,24,.86);
-    display:flex;align-items:center;justify-content:center;gap:14px;z-index:3}
+    display:flex;align-items:center;justify-content:center;gap:12px;z-index:3}
   #status{position:absolute;top:0;left:0;width:100%;text-align:center;padding:10px 8px;
-    font-size:15px;color:#e5c04f;background:rgba(16,18,24,.7);z-index:3}
-  .btn{border:none;border-radius:26px;padding:12px 22px;font-size:16px;font-weight:600;color:#fff}
-  #hang{background:#c0392b} #mute{background:#333} #camoff{background:#333}
-  #err{position:absolute;top:44%;left:0;width:100%;text-align:center;font-size:17px;
-    color:#e0715a;padding:0 20px;z-index:3;display:none}
+    font-size:15px;color:#e5c04f;background:rgba(16,18,24,.72);z-index:3}
+  .btn{border:none;border-radius:24px;padding:11px 18px;font-size:15px;font-weight:600;color:#fff}
+  #hang{background:#c0392b} #mute,#camoff,#dbgbtn{background:#333}
+  #dbg{position:absolute;left:6px;bottom:70px;width:56%;max-height:44%;overflow:auto;z-index:4;
+    font-family:monospace;font-size:11px;line-height:1.45;color:#8fe0a8;
+    background:rgba(0,0,0,.6);border-radius:6px;padding:6px 8px;display:none;white-space:pre-wrap}
 </style>
 </head>
 <body>
   <video id="remote" autoplay playsinline></video>
   <video id="local" autoplay playsinline muted></video>
   <div id="status">Starting…</div>
-  <div id="err"></div>
+  <div id="dbg"></div>
   <div id="bar">
     <button id="mute" class="btn">Mute</button>
     <button id="camoff" class="btn">Camera</button>
+    <button id="dbgbtn" class="btn">Log</button>
     <button id="hang" class="btn">Hang up</button>
   </div>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 (function(){
   var $ = function(id){ return document.getElementById(id); };
-  function status(t){ $("status").textContent = t; }
-  function fail(t){ var e=$("err"); e.textContent=t; e.style.display="block"; status(""); }
+  var t0 = (typeof Date.now==="function") ? Date.now() : 0;
+  function log(m){
+    var d=$("dbg"); var s=(((typeof Date.now==="function"?Date.now():0)-t0)/1000).toFixed(1);
+    d.textContent += "["+s+"s] "+m+"\n"; d.scrollTop=d.scrollHeight;
+  }
+  function status(t){ $("status").textContent=t; log("STATUS: "+t); }
 
-  // Room comes from the URL hash (#<room>); both callers use the same room to meet.
-  var room = (location.hash || "").replace(/^#/, "").replace(/[^a-zA-Z0-9]/g, "");
-  if (!room) { room = "webosVClobby"; }
+  // Room: prefer ?room= (survives app launch); fall back to #hash; then a shared lobby.
+  function getRoom(){
+    var q = (location.search||"").match(/[?&]room=([^&]+)/);
+    if (q) return decodeURIComponent(q[1]).replace(/[^a-zA-Z0-9]/g,"");
+    var h = (location.hash||"").replace(/^#/,"").replace(/[^a-zA-Z0-9]/g,"");
+    return h || "webosVClobby";
+  }
+  var room = getRoom();
   var HOST_ID = "webosvc-" + room + "-host";
+  log("url=" + location.href);
+  log("room=" + room + "  hostId=" + HOST_ID);
 
-  var localStream = null, peer = null, activeCall = null, muted = false, camOff = false;
+  var localStream=null, peer=null, activeCall=null, muted=false, camOff=false, connected=false, retryTimer=null;
 
-  function attachRemote(call){
-    activeCall = call;
-    call.on("stream", function(rs){ $("remote").srcObject = rs; status(""); });
-    call.on("close", function(){ status("Call ended."); });
-    call.on("error", function(e){ status("Call error: " + (e && e.type || e)); });
+  function watchIce(call){
+    try {
+      var pc = call.peerConnection;
+      if (pc) pc.oniceconnectionstatechange = function(){ log("ICE: " + pc.iceConnectionState); };
+    } catch(e){}
+  }
+  function onStream(rs){
+    connected=true; if(retryTimer){clearInterval(retryTimer);retryTimer=null;}
+    $("remote").srcObject=rs; status("Connected.");
+  }
+  function attach(call){
+    activeCall=call; watchIce(call);
+    call.on("stream", onStream);
+    call.on("close", function(){ log("call closed"); if(!connected) status("Other side left."); });
+    call.on("error", function(e){ log("call error: "+(e&&e.type||e)); });
   }
 
   function beHost(){
     status("Waiting for the other person to join…");
-    peer.on("call", function(call){ call.answer(localStream); attachRemote(call); });
+    log("hosting as " + HOST_ID);
+    peer.on("call", function(call){ log("incoming call from "+call.peer); call.answer(localStream); attach(call); });
+  }
+  function callHost(){
+    if (connected) return;
+    log("calling host " + HOST_ID + " …");
+    var call = peer.call(HOST_ID, localStream);
+    if (call) attach(call); else log("peer.call returned null");
   }
   function beGuest(){
-    status("Connecting…");
-    var call = peer.call(HOST_ID, localStream);
-    if (call) { attachRemote(call); }
-    else { setTimeout(beGuest, 1200); } // host not ready yet, retry
+    status("Connecting to the other person…");
+    callHost();
+    // Keep retrying until the media stream arrives (handles host-not-ready-yet / dropped signalling).
+    if(!retryTimer) retryTimer=setInterval(function(){ if(!connected) callHost(); }, 3000);
   }
 
   function startPeer(asHostId){
+    log("startPeer(" + (asHostId||"random-guest") + ")");
     peer = asHostId ? new Peer(asHostId) : new Peer();
-    peer.on("open", function(){ if (asHostId) beHost(); else beGuest(); });
+    peer.on("open", function(id){ log("peer open, myId=" + id); if(asHostId) beHost(); else beGuest(); });
+    peer.on("disconnected", function(){ log("peer disconnected from broker; reconnecting"); try{peer.reconnect();}catch(e){} });
     peer.on("error", function(e){
-      if (e && e.type === "unavailable-id") {
-        // Someone already claimed the host slot -> we are the guest and call them.
-        try { peer.destroy(); } catch(x){}
-        startPeer(null);
-      } else if (e && e.type === "peer-unavailable") {
-        status("Waiting for the other person…"); setTimeout(beGuest, 1500);
-      } else {
-        status("Network: " + (e && e.type || e));
-      }
+      var ty = e && e.type; log("peer error: " + (ty||e));
+      if (ty==="unavailable-id"){ try{peer.destroy();}catch(x){} startPeer(null); }       // host taken -> be guest
+      else if (ty==="peer-unavailable"){ status("Waiting for the other person…"); }        // host not up yet; retry loop handles it
+      else { status("Network problem: " + (ty||e)); }
     });
   }
 
   function getCam(){
     var md = navigator.mediaDevices;
-    if (!md || !md.getUserMedia) { fail("This browser can't access the camera (getUserMedia missing)."); return; }
-    md.getUserMedia({ video: true, audio: true }).then(function(s){
-      localStream = s; $("local").srcObject = s;
-      // First to claim HOST_ID hosts; the other errors out and becomes the guest.
-      startPeer(HOST_ID);
-    }).catch(function(e){ fail("Camera/mic blocked: " + (e && e.name || e)); });
+    if (!md || !md.getUserMedia){ status("This browser can't open the camera (no getUserMedia)."); return; }
+    md.getUserMedia({video:true, audio:true}).then(function(s){
+      localStream=s; $("local").srcObject=s; log("camera OK");
+      startPeer(HOST_ID);   // first to claim the host id hosts; the other becomes guest and calls it
+    }).catch(function(e){ status("Camera/mic blocked: " + (e&&e.name||e)); });
   }
 
-  $("hang").onclick = function(){
-    try { if (activeCall) activeCall.close(); } catch(x){}
-    try { if (peer) peer.destroy(); } catch(x){}
-    try { if (localStream) localStream.getTracks().forEach(function(t){ t.stop(); }); } catch(x){}
-    status("Call ended. You can close this card.");
-    if (window.PalmSystem && window.close) { try { window.close(); } catch(x){} }
-  };
-  $("mute").onclick = function(){
-    muted = !muted; if (localStream) localStream.getAudioTracks().forEach(function(t){ t.enabled = !muted; });
-    $("mute").textContent = muted ? "Unmute" : "Mute";
-  };
-  $("camoff").onclick = function(){
-    camOff = !camOff; if (localStream) localStream.getVideoTracks().forEach(function(t){ t.enabled = !camOff; });
-    $("camoff").textContent = camOff ? "Cam on" : "Camera";
-  };
+  $("hang").onclick=function(){ try{if(activeCall)activeCall.close();}catch(x){} try{if(peer)peer.destroy();}catch(x){}
+    try{if(localStream)localStream.getTracks().forEach(function(t){t.stop();});}catch(x){} status("Call ended.");
+    if(window.PalmSystem&&window.close){try{window.close();}catch(x){}} };
+  $("mute").onclick=function(){ muted=!muted; if(localStream)localStream.getAudioTracks().forEach(function(t){t.enabled=!muted;});
+    $("mute").textContent=muted?"Unmute":"Mute"; };
+  $("camoff").onclick=function(){ camOff=!camOff; if(localStream)localStream.getVideoTracks().forEach(function(t){t.enabled=!camOff;});
+    $("camoff").textContent=camOff?"Cam on":"Camera"; };
+  $("dbgbtn").onclick=function(){ var d=$("dbg"); d.style.display=(d.style.display==="none"?"block":"none"); };
 
-  if (typeof Peer === "undefined") { fail("Failed to load the call library (no network?)."); return; }
-  getCam();
+  if (typeof Peer==="undefined"){ status("Failed to load call library (no network?)."); return; }
+  log("peerjs loaded"); getCam();
 })();
 </script>
 </body>
